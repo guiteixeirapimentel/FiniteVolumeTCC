@@ -386,3 +386,10 @@ FodyWeavers.xsd
 # JetBrains Rider
 .idea/
 *.sln.iml
+
+*.xlsx
+output/
+rect cylinder ReD 300 0.02 0.002 10 segs conv/
+stop case/
+trechos_codigo_overleaf/
+turbFlatPlate/

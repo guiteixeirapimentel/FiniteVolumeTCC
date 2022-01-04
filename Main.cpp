@@ -1,9 +1,10 @@
 #include <iostream>
 #include <ctime>
 
-#define AMGCL_DEBUG
+//#define AMGCL_DEBUG
 
 #include "FieldRectCylinder.h"
+#include "FieldRectCylinder2D.h"
 #include "LSSolver.h"
 #include "AMPSolver.h"
 
@@ -19,12 +20,14 @@ int SIMPLER();
 
 int REMIXCSIMPROVED();
 
+int REMIXCSIMPROVED2D();
+
 template<class T>
 T GetValue(const char* message);
 
 int main()
 {
-	return REMIXCSIMPROVED();
+	return REMIXCSIMPROVED2D();
 }
 
 int SIMPLER()
@@ -646,9 +649,9 @@ int REMIXCSIMPROVED()
 	
 	constexpr int NITMAXSIMPLE = 1000;
 	
-	double dd = 0.002;
+	double dd = 0.001;
 
-	double l = dd * 10;
+	double l = dd * 20;
 
 	double L = 26.0 * l;
 	double H = 15.0 * l;
@@ -657,7 +660,7 @@ int REMIXCSIMPROVED()
 	double w = W;
 	double h = l;
 		
-	double dt = 0.001;
+	double dt = 0.0005;
 
 	double maxTime = 15.0;
 	
@@ -750,9 +753,10 @@ int REMIXCSIMPROVED()
 
 	const int nItToSave = 366;// (saveEverySec / dt);
 
+	std::cout << "Atencao: o valor de pontos eh de " << NN << " sera necessario aprox. " << 0.7 * double(NN) / 1000000 << "GB de memoria" << std::endl;
+
 	if (NN > 500000)
 	{
-		std::cout << "Atencao: o valor de pontos eh de " << NN << " sera necessario aprox. " << 0.7 * double(NN) / 1000000 << "GB de memoria" << std::endl;
 		std::cout << "Continuar? (y/n): ";
 		char b;
 		std::cin >> b;
@@ -1175,6 +1179,498 @@ int REMIXCSIMPROVED()
 
 		u0Field = field.cUVelField;
 		v0Field = field.cVVelField;
+		w0Field = field.cWVelField;
+
+		tempoPassado += dt;
+		if (showText)
+		{
+			std::cout << "Tempo aprox restante para conclusao : " << (NITMAX - itTime) * (time(nullptr) - tSimple) << " segs  ou "
+				<< ((NITMAX - itTime) * (time(nullptr) - tSimple)) / 3600 << "horas" << std::endl;
+		}
+
+	}
+
+	return 0;
+}
+
+
+int REMIXCSIMPROVED2D()
+{
+	Timer timer;
+	const int tidSimple = timer.SetTimer("SIMPLE iteration");
+
+	const int tidCalcHatValues = timer.SetTimer("Calc. of hat values");
+
+	const int tidCreatPress = timer.SetTimer("Creation of pressure LS");
+	const int tidPress = timer.SetTimer("Pressure LS solver");
+
+	const int tidCorrsResiduals = timer.SetTimer("Corrections and residuals calcs");
+
+	constexpr int NITMAXSIMPLE = 1000;
+
+	double dd = 0.002/4;
+
+	double l = dd * 10 * 4;
+
+	double L = 26.0 * l;
+	double H = 15.0 * l;
+
+	double h = l;
+
+	double dt = 0.001/4;
+
+	double maxTime = 15.0;
+
+	double rho = 1.0;
+	double mu = 3.0e-5;
+
+	double ufreestream = 0.15;
+	double wfreestream = 0.0;
+
+	double maxuResidual = 5e-5;
+	double maxwResidual = 5e-5;
+	double maxpResidual = 5e-5;
+
+	double maxContinuityResidual = 1e-5;
+
+	const char answer = GetValue<char>("Recomecar? (y/n): ");
+	std::string baseFileName = "";
+	double initialTime = 0.0;
+
+	if (answer == 'y' || answer == 'Y')
+	{
+		baseFileName = GetValue<std::string>("Nome base arqs .dat (output/field10.010000): ");
+		initialTime = GetValue<double>("Tempo inicial representado pelo arquivo (10.01): ");
+
+		l = GetValue<double>("Diametro cilindro (l): ");
+
+		const double nL = GetValue<double>("Comp. relativo do campo (L/l)[19.0-21.0]: ");
+		const double nH = GetValue<double>("Alt. relativa do campo (H/l)[15.0-18.0]: ");
+
+		L = nL * l;
+		H = nH * l;
+
+		h = l;
+
+		dd = GetValue<double>("dd (10 % * l): ");
+
+		dt = GetValue<double>("dt (lookout for 0.05<CFL<0.30)");
+
+		maxTime = GetValue<double>("Max time (maxTime): ");
+
+		rho = GetValue<double>("Densidade (1.0): ");
+		mu = GetValue<double>("Mu [(3/2)*1e-5]: ");
+
+		ufreestream = GetValue<double>("U freestream (0.15): ");
+		wfreestream = GetValue<double>("W freestream (0.0): ");
+
+		const double CFL = 3.0 * ufreestream * dt / dd;
+		const double ReD = rho * ufreestream * l / mu;
+
+		std::cout << "CFL " << CFL << std::endl;
+		std::cout << "ReD " << ReD << std::endl;
+	}
+
+
+	const int NITMAX = int(maxTime / dt) + 2;
+
+	std::cout << "Max. iteracoes tempo: " << NITMAX << std::endl;
+
+
+	// FOR DEBUGGING PURPOSES
+
+	const int64_t NX = int64_t(L / dd) + 2;
+	const int64_t NZ = int64_t(H / dd) + 2;
+
+	const int64_t NN = NX * NZ;
+
+	const double ReL = rho * ufreestream * L / mu;
+	const double ReD = rho * ufreestream * l / mu;
+
+	const double delta = 5.0 * L / sqrt(ReL);
+
+	const double Peclet = rho * ufreestream / (mu / dd);
+
+	const double CFL = 3.0 * ufreestream * dt / dd;
+
+	const double f0 = 0.16 * ufreestream / l;
+	const double f1 = 0.2 * ufreestream / l;
+
+	const double T0 = 1.0 / f0;
+	const double T1 = 1.0 / f1;
+
+	const double saveEverySec = (T1 / 10.0);
+
+	const int nItToSave = 366*4;// (saveEverySec / dt);
+
+	std::cout << "Atencao: o valor de pontos eh de " << NN << " sera necessario aprox. " << 0.7 * double(NN) / 1000000 << "GB de memoria" << std::endl;
+
+	if (NN > 500000)
+	{
+		std::cout << "Continuar? (y/n): ";
+		char b;
+		std::cin >> b;
+		if (b != 'y')
+			return 0;
+		else
+			std::cout << "Continuando....\n";
+	}
+
+	// FOR DEBUGGING PURPOSES
+
+	FieldRectCylinder2D field(L, H, l, dd, rho, mu, ufreestream, wfreestream);
+
+	field.SetBCFlatPlate();
+
+	if (answer == 'y' || answer == 'Y')
+	{
+		field.ReadField(baseFileName);
+
+		std::cout << "Leu " << baseFileName << std::endl;
+	}
+
+
+	double tempoPassado = initialTime + dt;
+
+#ifdef _DEBUG
+	//field.SaveIKCutFieldToCSVFile(NY / 2, "OUT_DEBUG/initlong");
+	//field.SaveIJCutFieldToCSVFile(NZ / 2, "OUT_DEBUG/initlat");
+#endif
+
+	//FieldRectCylinder fieldnm = field;
+
+	doubleField2D ulastIField = field.cUVelField;
+	doubleField2D wlastIField = field.cWVelField;
+	doubleField2D pLastIField = field.cPressureField;
+
+	doubleField2D u0Field = field.cUVelField;
+	doubleField2D w0Field = field.cWVelField;
+
+	std::vector<int>   ptr, col;
+	std::vector<double> val, rhs;
+
+	LSSolver linearSystemSolver;
+
+	bool showText = true;
+
+	int nItPressure = 100;
+	const int maxNItPressureToReCondition = 40;
+
+	for (int itTime = (tempoPassado / dt); itTime < NITMAX; itTime++)
+	{
+		const time_t tSimple = time(nullptr);
+
+		// SET INLET PERTUBATION
+		{
+			for (int k = 1; k < NZ - 1; k++)
+			{
+				field.cUVelField[0 + (k * NX)] = ufreestream +
+					(sin(tempoPassado + (k * dd)) * ufreestream * 0.01);
+
+				field.cUVelField[1 + (k * NX)] = ufreestream +
+					(sin(tempoPassado + (k * dd)) * ufreestream * 0.01);
+			}
+		}
+
+		for (int itSimple = 0; itSimple < NITMAXSIMPLE; itSimple++)
+		{
+			timer.Tick(tidSimple);
+
+			if (GetAsyncKeyState('H') & 0x8000)
+			{
+				showText = false;
+				std::cout << "@@@@@ CHANGED ALL TEXT TO HIDE (HOLD H TO HIDE - S TO SHOW) @@@@@\n";
+			}
+			else if (GetAsyncKeyState('S') & 0x8000)
+			{
+				showText = true;
+				std::cout << "@@@@@ CHANGED ALL TEXT TO SHOW (HOLD H TO HIDE - S TO SHOW) @@@@@\n";
+			}
+
+#ifdef _DDEBUG
+			double resSimplePosMom = 0.0;
+			for (int k = 2; k < field.cNZ - 1; k++)
+				for (int i = 2; i < field.cNX - 1; i++)
+				{
+					resSimplePosMom = fmax(
+						fabs(
+						(
+							field.cUVelField[(j * NZ * NX) + (k * NX) + i] - field.cUVelField[(j * NZ * NX) + (k * NX) + i + 1] +
+							field.cWVelField[(j * NZ * NX) + (k * NX) + i] - field.cWVelField[(j * NZ * NX) + ((k + 1) * NX) + i]
+							)
+						), resSimplePosMom);
+				}
+				
+
+			std::cout << "Residual simple pre momentum eqts. " << resSimplePosMom << std::endl;
+#endif
+
+			//ulastIField = field.cUVelField;
+			//wlastIField = field.cWVelField;
+			//pLastIField = field.cPressureField;
+
+			memcpy(ulastIField.data(), field.cUVelField.data(), field.cUVelField.size() * sizeof(double));
+			memcpy(wlastIField.data(), field.cWVelField.data(), field.cWVelField.size() * sizeof(double));
+			memcpy(pLastIField.data(), field.cPressureField.data(), field.cPressureField.size() * sizeof(double));
+
+			time_t t1 = time(nullptr);
+
+			// Calculate field hat values
+			timer.Tick(tidCalcHatValues);
+
+			field.CalcUHatValuesCN(u0Field, dt);
+			field.CalcWHatValuesCN(w0Field, dt);
+
+			timer.Tock(tidCalcHatValues);
+
+			// Solve pressure equation
+			timer.Tick(tidPress);
+
+			timer.Tick(tidCreatPress);
+			int nn = field.CreatePressureLSCSRFI(ptr, col, val, rhs);
+			timer.Tock(tidCreatPress);
+
+			double errPressLS = 0.0;
+			int nitPressLS = 0;
+			// solve LS Pressure eqt
+
+			if (nItPressure > maxNItPressureToReCondition)
+			{
+				linearSystemSolver.PrecondtionCRS(nn, ptr, col, val, maxContinuityResidual * 1e-3);
+			}
+
+			linearSystemSolver.SolvePreconditionedCRS(std::move(field.cPressureField), nn, ptr, col,
+				val, rhs, errPressLS, nitPressLS);
+
+			//linearSystemSolver.SolveSparseCRS(std::move(field.cPressureField), nn, ptr, col, val, rhs, errPressLS, nitPressLS);
+
+			nItPressure = nitPressLS;
+
+
+			if (isnan(errPressLS))
+			{
+				std::cout << "Erro ls Pressure - nao foi possivel resolver ls\n";
+				int x = 0;
+				std::cin >> x;
+			}
+
+			timer.Tock(tidPress);
+
+			if (showText)
+			{
+				std::cout << "Solved Pressure LS it " << nitPressLS << " residual " << errPressLS << std::endl;
+			}
+
+#ifdef _DEBUG
+			field.SaveIKCutFieldToCSVFile(NY / 2, "OUT_DEBUG/posmomlong");
+			field.SaveJKCutFieldToCSVFile(NX - 2, "OUT_DEBUG/posmomtrans");
+#endif   
+
+
+
+			timer.Tick(tidCorrsResiduals);
+
+			// CALCULATE TRUE VELOCITIES
+			// u
+			for (int K = 1; K < NZ - 1; K++)
+			{
+				for (int i = 2; i < NX - 1; i++)
+				{
+					if (i >= field.ciCyInit && i < field.ciCyEnd + 1 &&
+						K >= field.ckCyInit && K < field.ckCyEnd)
+					{
+						// DENTRO DO SOLIDO OU EXATAMENTE NA PAREDE DO SÓLIDO
+					}
+					else
+					{
+						field.cUVelField[(K * NX) + i] = field.cUHatVelField[(K * NX) + i]
+							+ ((field.cPressureField[(K * NX) + i - 1] - field.cPressureField[(K * NX) + i])
+								*(dd / field.caijkU[(K * NX) + i]));
+
+						/*(dd * dd / field.caijkU[(K * NX) + i]) *
+						(field.cPressureCorrField[(K * NX) + i - 1] - field.cPressureCorrField[(K * NX) + i]);
+						*/
+					}
+				}
+			}
+
+			//w
+			for (int K = 2; K < NZ - 1; K++)
+			{
+				for (int i = 1; i < NX - 1; i++)
+				{
+					if (i >= field.ciCyInit && i < field.ciCyEnd &&
+						K >= field.ckCyInit && K < field.ckCyEnd + 1)
+					{
+						// DENTRO DO SOLIDO OU EXATAMENTE NA PAREDE DO SÓLIDO
+					}
+					else
+					{
+						//field.cWVelField[(J * NZ * NX) + (K * NX) + i] += (dd * dd / field.caijkW[(J * NZ * NX) + (K * NX) + i]) *
+						//	(field.cPressureCorrField[(J * NZ * NX) + ((K - 1) * NX) + i] - field.cPressureCorrField[(J * NZ * NX) + (K * NX) + i]);
+
+						field.cWVelField[(K * NX) + i] = field.cWHatVelField[(K * NX) + i]
+							+ ((field.cPressureField[((K - 1) * NX) + i] - field.cPressureField[(K * NX) + i])
+								* (dd / field.caijkW[(K * NX) + i]));
+					}
+				}
+			}
+
+			double ures = 0.0;
+			double vres = 0.0;
+			double wres = 0.0;
+			double pres = 0.0;
+
+			double sumCFL = 0.0;
+
+			double CFLmax = 0.0;
+
+			// calc residuals velocities
+			for (int k = 0; k < NZ; k++)
+				for (int i = 0; i < NX; i++)
+				{
+					const double uResidual = fabs(field.cUVelField[(k * NX) + i] - ulastIField[(k * NX) + i]);
+
+					if (uResidual > ures)
+					{
+						ures = uResidual;
+					}
+					
+					const double wResidual = fabs(field.cWVelField[(k * NX) + i] - wlastIField[(k * NX) + i]);
+
+					if (wResidual > wres)
+					{
+						wres = wResidual;
+					}
+
+					const double cfl = (fabs(field.cUVelField[(k * NX) + i])
+						+ fabs(field.cWVelField[(k * NX) + i])) * dt / dd;
+
+					sumCFL += cfl;
+
+					if (cfl > CFLmax)
+						CFLmax = cfl;
+				}
+
+			const double CFLMean = sumCFL / (field.cNX * field.cNZ);
+
+			int iPres = 0;
+			int jPres = 0;
+			int kPres = 0;
+			double pij = 0.0;
+			double presAcum = 0.0;
+
+			for (int k = 2; k < NZ - 2; k++)
+				for (int i = 2; i < NX - 2; i++)
+					{
+						const double residual = fabs((field.cPressureField[(k * NX) + i] -
+							pLastIField[(k * NX) + i]));
+
+						if (residual > pres)
+						{
+							pres = residual;
+							iPres = i;
+							kPres = k;
+							pij = field.cPressureField[(k * NX) + i];
+						}
+					}
+
+			for (int k = 2; k < NZ - 2; k++)
+				for (int i = 2; i < NX - 2; i++)
+					{
+						const double residual = fabs((field.cPressureField[(k * NX) + i] -
+							pLastIField[(k * NX) + i]));
+
+						presAcum += residual;
+					}
+
+			double resSimple = 0.0;
+			int iResSimple = 0;
+			int jResSimple = 0;
+			int kResSimple = 0;
+
+			// SET/EXTRAPOLATE/ENFORCES OUTLET B.C.
+			{
+				for (int64_t k = 1; k < NZ - 1; k++)
+				{
+					const int64_t i = NX - 2;
+
+					field.cUVelField[(k * NX) + i + 1] = field.cUVelField[(k * NX) + i] +
+						field.cWVelField[(k * NX) + i] - field.cWVelField[((k + 1) * NX) + i];
+				}
+
+				field.ExtrapolateBackwardWJk(NX - 1);
+			}
+
+			for (int k = 2; k < field.cNZ - 1; k++)
+				for (int i = 2; i < field.cNX - 1; i++)
+				{
+					const double residual = fabs(
+						field.cUVelField[(k * NX) + i] - field.cUVelField[(k * NX) + i + 1] +
+						field.cWVelField[(k * NX) + i] - field.cWVelField[((k + 1) * NX) + i]
+					) * field.cRHO * field.cdA;
+
+					if (residual > resSimple)
+					{
+						resSimple = residual;
+
+						iResSimple = i;
+						kResSimple = k;
+					}
+				}
+
+			timer.Tock(tidCorrsResiduals);
+
+			if (showText)
+			{
+				std::cout << "##########################################\n";
+				std::cout << "##########################################\n";
+
+				std::cout << "resSimple: " << resSimple << " ures "
+					<< ures << " vres " << vres << " wres " << wres << " pres " << pres << std::endl;
+				std::cout << "maior mudanca em pres i " << iPres << " j " << jPres << " k " << kPres << " pij " << pij << std::endl;
+				std::cout << "pres acumulado " << presAcum << std::endl;
+				std::cout << "maior mudanca em res simple i " << iResSimple << " j " << jResSimple << " k " << kResSimple << std::endl;
+				std::cout << "CFL medio " << CFLMean << " maior CFL " << CFLmax << std::endl;
+			}
+
+#ifdef _DEBUG
+			field.SaveIKCutFieldToCSVFile(NY / 2, "OUT_DEBUG/poscorrlong");
+			field.SaveJKCutFieldToCSVFile(NX - 2, "OUT_DEBUG/poscorrtrans");
+#endif
+
+			if ((resSimple < maxContinuityResidual && pres < maxpResidual) && ures < maxuResidual
+				&& wres < maxwResidual)
+			{
+				std::cout << "Simple converged; time: " << tempoPassado << std::endl;
+				std::cout << "Tempo para convergir simple: " << time(nullptr) - tSimple << " \n";
+
+				std::cout << "##########################################\n";
+				std::cout << "##########################################\n";
+
+				if (((itTime % nItToSave) == 0) || (tempoPassado > 12.0 && (itTime % (nItToSave / 6)) == 0))
+				{
+					field.SaveField("output/field" + std::to_string(tempoPassado));
+					field.SaveIKCutFieldToCSVFile("turbFlatPlate/corteLong" + std::to_string(tempoPassado));
+				}
+
+				break;
+			}
+			if (showText)
+			{
+				std::cout << "Last simple iteration spent " << time(nullptr) - t1 << " seconds\n";
+			}
+
+			timer.Tock(tidSimple);
+
+			if (showText)
+			{
+				timer.WriteToCoutAllTickTock();
+			}
+
+		}
+
+		u0Field = field.cUVelField;
 		w0Field = field.cWVelField;
 
 		tempoPassado += dt;
